@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -16,15 +16,25 @@ type OpeningByDateRow = {
   user_id: string;
   day: string; // YYYY-MM-DD
   is_closed: boolean;
-  open_time: string;  // HH:MM:SS
+  open_time: string; // HH:MM:SS
   close_time: string; // HH:MM:SS
   slot_minutes: number;
 };
 
-type OrderRow = {
+type OpeningRuleRow = {
   id: string;
   user_id: string;
-  day: string;       // YYYY-MM-DD
+  start_day: string; // YYYY-MM-DD
+  is_closed: boolean;
+  open_time: string;
+  close_time: string;
+  slot_minutes: number;
+};
+
+type OrderAggRow = {
+  id: string;
+  user_id: string;
+  day: string;
   slot_time: string; // HH:MM:SS
   qty: number;
   created_at: string;
@@ -46,6 +56,10 @@ function fromYYYYMMDD(s: string) {
 
 function hhmm(t: string) {
   return t.slice(0, 5);
+}
+
+function toTimeHHMMSS(hhmmStr: string) {
+  return `${hhmmStr}:00`;
 }
 
 function formatDateIT(yyyyMmDd: string) {
@@ -86,11 +100,12 @@ function generateSlotsHHMM(openHHMM: string, closeHHMM: string, slotMinutes: num
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
-}
 function isSameDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 function isToday(d: Date) {
   return isSameDay(d, new Date());
@@ -105,17 +120,12 @@ function CalendarPopover(props: {
   const [view, setView] = useState<Date>(() => startOfMonth(selected));
 
   useEffect(() => {
-    // quando cambia la data selezionata, allinea il mese visibile
     setView(startOfMonth(fromYYYYMMDD(props.value)));
   }, [props.value]);
 
-  const days = useMemo(() => {
+  const gridDays = useMemo(() => {
     const first = startOfMonth(view);
-    const last = endOfMonth(view);
-
-    // In Italia la settimana parte da lunedì.
-    // JS: getDay() => 0 dom, 1 lun, ... 6 sab
-    const firstDayJS = first.getDay();
+    const firstDayJS = first.getDay(); // 0 dom ... 6 sab
     const mondayBased = (firstDayJS + 6) % 7; // lun=0 ... dom=6
     const gridStart = new Date(first);
     gridStart.setDate(first.getDate() - mondayBased);
@@ -126,8 +136,7 @@ function CalendarPopover(props: {
       d.setDate(gridStart.getDate() + i);
       grid.push(d);
     }
-
-    return { grid, first, last };
+    return grid;
   }, [view]);
 
   const weekdays = ["L", "M", "M", "G", "V", "S", "D"];
@@ -150,43 +159,42 @@ function CalendarPopover(props: {
   }
 
   return (
-    <div style={styles.calWrap}>
-      <div style={styles.calHeader}>
-        <button onClick={prevMonth} style={styles.calNavBtn} aria-label="Mese precedente">‹</button>
-        <div style={styles.calTitle}>{formatMonthIT(view)}</div>
-        <button onClick={nextMonth} style={styles.calNavBtn} aria-label="Mese successivo">›</button>
+    <div style={styles.popWrap}>
+      <div style={styles.popHeader}>
+        <button onClick={prevMonth} style={styles.popNavBtn} aria-label="Mese precedente">
+          ‹
+        </button>
+        <div style={styles.popTitle}>{formatMonthIT(view)}</div>
+        <button onClick={nextMonth} style={styles.popNavBtn} aria-label="Mese successivo">
+          ›
+        </button>
       </div>
 
-      <div style={styles.calWeekdays}>
-        {weekdays.map((w) => (
-          <div key={w} style={styles.calWeekday}>{w}</div>
+      <div style={styles.popWeekdays}>
+        {weekdays.map((w, i) => (
+          <div key={`${w}-${i}`} style={styles.popWeekday}>
+            {w}
+          </div>
         ))}
       </div>
 
-      <div style={styles.calGrid}>
-        {days.grid.map((d, idx) => {
+      <div style={styles.popGrid}>
+        {gridDays.map((d, idx) => {
           const inMonth = d.getMonth() === view.getMonth();
           const sel = isSameDay(d, selected);
           const today = isToday(d);
 
           const cellStyle: React.CSSProperties = {
-            ...styles.calDay,
+            ...styles.popDay,
             opacity: inMonth ? 1 : 0.35,
             border: sel ? "2px solid black" : "1px solid #e5e5e5",
-            fontWeight: sel ? 900 : 700,
+            fontWeight: sel ? 900 : 800,
           };
 
-          // evidenzia oggi (se non selezionato)
-          if (today && !sel) {
-            cellStyle.border = "1px solid #999";
-          }
+          if (today && !sel) cellStyle.border = "1px solid #999";
 
           return (
-            <button
-              key={`${d.toISOString()}-${idx}`}
-              onClick={() => pick(d)}
-              style={cellStyle}
-            >
+            <button key={`${d.toISOString()}-${idx}`} onClick={() => pick(d)} style={cellStyle}>
               {d.getDate()}
             </button>
           );
@@ -204,37 +212,38 @@ export default function Page() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  // date
+  // date popover
   const [selectedDay, setSelectedDay] = useState<string>(() => toYYYYMMDD(new Date()));
   const [calendarOpen, setCalendarOpen] = useState(false);
+
+  // hours popover
+  const [hoursOpen, setHoursOpen] = useState(false);
 
   // settings
   const [maxPerSlot, setMaxPerSlot] = useState<number>(10);
 
-  // opening hours by date
+  // current effective hours for selectedDay
   const [isClosed, setIsClosed] = useState<boolean>(false);
   const [openHHMM, setOpenHHMM] = useState<string>("18:30");
   const [closeHHMM, setCloseHHMM] = useState<string>("22:00");
   const [slotMinutes, setSlotMinutes] = useState<number>(15);
 
-  // orders
-  const [orders, setOrders] = useState<OrderRow[]>([]);
+  // orders aggregate
+  const [orders, setOrders] = useState<OrderAggRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const slots = useMemo(() => {
-    if (isClosed) return [];
-    return generateSlotsHHMM(openHHMM, closeHHMM, slotMinutes);
-  }, [openHHMM, closeHHMM, slotMinutes, isClosed]);
-
-  // close calendar clicking outside
-  const calBoxRef = useRef<HTMLDivElement | null>(null);
+  // popover click-outside handler (for both)
+  const popWrapRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!calendarOpen) return;
+    if (!calendarOpen && !hoursOpen) return;
 
     const onDown = (e: MouseEvent | TouchEvent) => {
       const target = e.target as Node;
-      if (!calBoxRef.current) return;
-      if (!calBoxRef.current.contains(target)) setCalendarOpen(false);
+      if (!popWrapRef.current) return;
+      if (!popWrapRef.current.contains(target)) {
+        setCalendarOpen(false);
+        setHoursOpen(false);
+      }
     };
 
     document.addEventListener("mousedown", onDown);
@@ -243,7 +252,12 @@ export default function Page() {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("touchstart", onDown);
     };
-  }, [calendarOpen]);
+  }, [calendarOpen, hoursOpen]);
+
+  const slots = useMemo(() => {
+    if (isClosed) return [];
+    return generateSlotsHHMM(openHHMM, closeHHMM, slotMinutes);
+  }, [openHHMM, closeHHMM, slotMinutes, isClosed]);
 
   // AUTH
   useEffect(() => {
@@ -269,78 +283,83 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, selectedDay]);
 
-  async function loadAll(showSpinner: boolean) {
-    if (!user) return;
-    if (showSpinner) setLoading(true);
-
-    // settings
-    const s = await supabase
-      .from("settings")
-      .select("user_id,max_per_slot")
-      .eq("user_id", user.id)
-      .maybeSingle();
+  async function ensureSettingsRow(uid: string) {
+    const s = await supabase.from("settings").select("user_id,max_per_slot").eq("user_id", uid).maybeSingle();
 
     if (s.data) {
       setMaxPerSlot((s.data as SettingsRow).max_per_slot);
     } else {
-      await supabase.from("settings").upsert(
-        { user_id: user.id, max_per_slot: maxPerSlot },
-        { onConflict: "user_id" }
-      );
+      await supabase.from("settings").upsert({ user_id: uid, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
     }
+  }
 
-    // opening hours by date
-    const oh = await supabase
+  async function loadEffectiveHours(uid: string) {
+    // 1) override per singolo giorno?
+    const byDate = await supabase
       .from("opening_hours_by_date")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", uid)
       .eq("day", selectedDay)
       .maybeSingle();
 
-    if (oh.data) {
-      const row = oh.data as OpeningByDateRow;
+    if (byDate.data) {
+      const row = byDate.data as OpeningByDateRow;
       setIsClosed(row.is_closed);
       setOpenHHMM(hhmm(row.open_time));
       setCloseHHMM(hhmm(row.close_time));
       setSlotMinutes(row.slot_minutes);
-    } else {
-      await supabase.from("opening_hours_by_date").upsert(
-        {
-          user_id: user.id,
-          day: selectedDay,
-          is_closed: false,
-          open_time: "18:30",
-          close_time: "22:00",
-          slot_minutes: 15,
-        },
-        { onConflict: "user_id,day" }
-      );
-      setIsClosed(false);
-      setOpenHHMM("18:30");
-      setCloseHHMM("22:00");
-      setSlotMinutes(15);
+      return;
     }
 
-    // orders
-    const o = await supabase
-      .from("orders")
+    // 2) regola "da questo giorno in poi": prendi la più recente <= selectedDay
+    const rule = await supabase
+      .from("opening_rules")
       .select("*")
-      .eq("user_id", user.id)
-      .eq("day", selectedDay)
-      .order("created_at", { ascending: true });
+      .eq("user_id", uid)
+      .lte("start_day", selectedDay)
+      .order("start_day", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    setOrders((o.data as OrderRow[]) ?? []);
+    if (rule.data) {
+      const r = rule.data as OpeningRuleRow;
+      setIsClosed(r.is_closed);
+      setOpenHHMM(hhmm(r.open_time));
+      setCloseHHMM(hhmm(r.close_time));
+      setSlotMinutes(r.slot_minutes);
+      return;
+    }
+
+    // 3) default
+    setIsClosed(false);
+    setOpenHHMM("18:30");
+    setCloseHHMM("22:00");
+    setSlotMinutes(15);
+  }
+
+  async function loadOrders(uid: string) {
+    const o = await supabase.from("orders").select("*").eq("user_id", uid).eq("day", selectedDay);
+    setOrders((o.data as OrderAggRow[]) ?? []);
+  }
+
+  async function loadAll(showSpinner: boolean) {
+    if (!user) return;
+    if (showSpinner) setLoading(true);
+
+    await ensureSettingsRow(user.id);
+    await loadEffectiveHours(user.id);
+    await loadOrders(user.id);
 
     if (showSpinner) setLoading(false);
   }
 
-  function usedFor(slotHHMM: string) {
-    return orders
-      .filter((o) => hhmm(o.slot_time) === slotHHMM)
-      .reduce((sum, o) => sum + o.qty, 0);
+  function qtyForSlot(slotHHMM: string) {
+    const t = toTimeHHMMSS(slotHHMM);
+    const row = orders.find((r) => r.slot_time === t);
+    return row ? row.qty : 0;
   }
 
-  // auth actions
+  // AUTH actions
   async function doLogin() {
     setLoading(true);
     const res = await supabase.auth.signInWithPassword({ email, password });
@@ -355,21 +374,14 @@ export default function Page() {
   async function saveMax() {
     if (!user) return;
     setLoading(true);
-    const res = await supabase.from("settings").upsert(
-      { user_id: user.id, max_per_slot: maxPerSlot },
-      { onConflict: "user_id" }
-    );
+    const res = await supabase.from("settings").upsert({ user_id: user.id, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
     setLoading(false);
     if (res.error) alert(res.error.message);
   }
 
-  async function saveOpeningByDate() {
+  // hours actions (popup)
+  async function saveHoursOnlyThisDay() {
     if (!user) return;
-    if (!isClosed && (!openHHMM || !closeHHMM)) {
-      alert("Inserisci orario apertura/chiusura");
-      return;
-    }
-
     setLoading(true);
     const res = await supabase.from("opening_hours_by_date").upsert(
       {
@@ -384,53 +396,71 @@ export default function Page() {
     );
     setLoading(false);
     if (res.error) alert(res.error.message);
+    setHoursOpen(false);
     await loadAll(false);
   }
 
-  // orders actions
-  async function increment(slotHHMM: string, qty: number) {
+  async function applyHoursFromThisDayOnward() {
     if (!user) return;
-    const used = usedFor(slotHHMM);
-    if (used + qty > maxPerSlot) {
+    setLoading(true);
+
+    const resRule = await supabase.from("opening_rules").upsert(
+      {
+        user_id: user.id,
+        start_day: selectedDay,
+        is_closed: isClosed,
+        open_time: `${openHHMM}:00`,
+        close_time: `${closeHHMM}:00`,
+        slot_minutes: slotMinutes,
+      },
+      { onConflict: "user_id,start_day" }
+    );
+
+    setLoading(false);
+    if (resRule.error) alert(resRule.error.message);
+
+    setHoursOpen(false);
+    await loadAll(false);
+  }
+
+  // orders actions (1 riga per slot)
+  async function upsertSlotQty(slotHHMM: string, delta: number) {
+    if (!user) return;
+
+    const slot_time = toTimeHHMMSS(slotHHMM);
+    const current = qtyForSlot(slotHHMM);
+    const next = Math.max(0, current + delta);
+
+    if (next > maxPerSlot) {
       alert("SLOT PIENO ❌");
       return;
     }
 
-    const res = await supabase.from("orders").insert({
-      user_id: user.id,
-      day: selectedDay,
-      slot_time: `${slotHHMM}:00`,
-      qty,
-      note: null,
-    });
+    if (next === 0) {
+      const row = orders.find((r) => r.slot_time === slot_time);
+      if (!row) return;
+      const res = await supabase.from("orders").delete().eq("id", row.id);
+      if (res.error) alert(res.error.message);
+      await loadAll(false);
+      return;
+    }
+
+    const res = await supabase.from("orders").upsert(
+      {
+        user_id: user.id,
+        day: selectedDay,
+        slot_time,
+        qty: next,
+        note: null,
+      },
+      { onConflict: "user_id,day,slot_time" }
+    );
 
     if (res.error) {
       alert(res.error.message);
       return;
     }
-    await loadAll(false);
-  }
 
-  async function decrementOne(slotHHMM: string) {
-    if (!user) return;
-    const same = orders.filter((o) => hhmm(o.slot_time) === slotHHMM);
-    if (same.length === 0) return;
-
-    const last = same[same.length - 1];
-    if (last.qty > 1) {
-      const res = await supabase.from("orders").update({ qty: last.qty - 1 }).eq("id", last.id);
-      if (res.error) alert(res.error.message);
-    } else {
-      const res = await supabase.from("orders").delete().eq("id", last.id);
-      if (res.error) alert(res.error.message);
-    }
-  }
-
-  async function decrement(slotHHMM: string, qty: number) {
-    for (let i = 0; i < qty; i++) {
-      // eslint-disable-next-line no-await-in-loop
-      await decrementOne(slotHHMM);
-    }
     await loadAll(false);
   }
 
@@ -439,11 +469,7 @@ export default function Page() {
     if (!confirm("Sicuro di azzerare tutti gli ordini di questo giorno?")) return;
 
     setLoading(true);
-    const res = await supabase
-      .from("orders")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("day", selectedDay);
+    const res = await supabase.from("orders").delete().eq("user_id", user.id).eq("day", selectedDay);
     setLoading(false);
 
     if (res.error) alert(res.error.message);
@@ -463,7 +489,13 @@ export default function Page() {
         <h1 style={styles.title}>Pizzeria - Slot</h1>
         <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
           <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} />
-          <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={styles.input} />
+          <input
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={styles.input}
+          />
           <button onClick={doLogin} disabled={loading || !email || !password} style={styles.primaryBtn}>
             {loading ? "..." : "LOGIN"}
           </button>
@@ -473,36 +505,71 @@ export default function Page() {
   }
 
   return (
-    <div style={styles.wrap}>
+    <div style={styles.wrap} ref={popWrapRef}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
         <div>
           <h1 style={styles.title}>Disponibilità</h1>
           <div style={styles.sub}>Auto refresh: 5s ✅</div>
         </div>
-        <button onClick={doLogout} style={styles.ghostBtn}>Logout</button>
+        <button onClick={doLogout} style={styles.ghostBtn}>
+          Logout
+        </button>
       </div>
 
-      {/* DATE SELECTOR + MINI CALENDAR */}
-      <div style={{ ...styles.panel, position: "relative" }} ref={calBoxRef}>
+      {/* TOP BAR: day + hours */}
+      <div style={{ ...styles.panel, position: "relative" }}>
         <div style={{ fontWeight: 900 }}>Giorno</div>
 
         <button
-          onClick={() => setCalendarOpen((v) => !v)}
+          onClick={() => {
+            setCalendarOpen((v) => !v);
+            setHoursOpen(false);
+          }}
           style={styles.dateBtn}
           title="Apri calendario"
         >
           {formatDateIT(selectedDay)}
         </button>
 
-        <button onClick={() => goDay(-1)} style={styles.ghostBtn} title="Giorno precedente">←</button>
-        <button onClick={() => goDay(1)} style={styles.ghostBtn} title="Giorno successivo">→</button>
+        <button onClick={() => goDay(-1)} style={styles.ghostBtn} title="Giorno precedente">
+          ←
+        </button>
+        <button onClick={() => goDay(1)} style={styles.ghostBtn} title="Giorno successivo">
+          →
+        </button>
+
+        <button
+          onClick={() => {
+            setHoursOpen((v) => !v);
+            setCalendarOpen(false);
+          }}
+          style={styles.ghostBtn}
+          title="Orari"
+        >
+          Orari
+        </button>
 
         {calendarOpen && (
-          <div style={styles.calPopup}>
-            <CalendarPopover
-              value={selectedDay}
-              onChange={(v) => setSelectedDay(v)}
-              onClose={() => setCalendarOpen(false)}
+          <div style={styles.popPos}>
+            <CalendarPopover value={selectedDay} onChange={(v) => setSelectedDay(v)} onClose={() => setCalendarOpen(false)} />
+          </div>
+        )}
+
+        {hoursOpen && (
+          <div style={styles.popPos}>
+            <HoursPopover
+              isClosed={isClosed}
+              setIsClosed={setIsClosed}
+              openHHMM={openHHMM}
+              setOpenHHMM={setOpenHHMM}
+              closeHHMM={closeHHMM}
+              setCloseHHMM={setCloseHHMM}
+              slotMinutes={slotMinutes}
+              setSlotMinutes={setSlotMinutes}
+              loading={loading}
+              onSaveOnlyThisDay={saveHoursOnlyThisDay}
+              onApplyFromThisDay={applyHoursFromThisDayOnward}
+              onClose={() => setHoursOpen(false)}
             />
           </div>
         )}
@@ -517,48 +584,13 @@ export default function Page() {
           onChange={(e) => setMaxPerSlot(Number(e.target.value))}
           style={{ ...styles.input, width: 90, padding: 8 }}
         />
-        <button onClick={saveMax} disabled={loading} style={styles.saveBtn}>Salva</button>
-        <button onClick={resetDay} disabled={loading} style={styles.ghostBtn}>Reset giorno</button>
-        {loading && <span style={styles.sub}>…</span>}
-      </div>
-
-      {/* OPENING HOURS FOR THIS DATE */}
-      <div style={styles.panelCol}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ fontWeight: 900 }}>Orari (per questa data)</div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <input type="checkbox" checked={isClosed} onChange={(e) => setIsClosed(e.target.checked)} />
-            Chiuso
-          </label>
-        </div>
-
-        {!isClosed && (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={styles.sub}>Da</span>
-              <input type="time" value={openHHMM} onChange={(e) => setOpenHHMM(e.target.value)} style={{ ...styles.input, padding: 8 }} />
-            </div>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={styles.sub}>a</span>
-              <input type="time" value={closeHHMM} onChange={(e) => setCloseHHMM(e.target.value)} style={{ ...styles.input, padding: 8 }} />
-            </div>
-
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={styles.sub}>Slot</span>
-              <select value={slotMinutes} onChange={(e) => setSlotMinutes(Number(e.target.value))} style={{ ...styles.input, padding: 8 }}>
-                <option value={10}>10 min</option>
-                <option value={15}>15 min</option>
-                <option value={20}>20 min</option>
-                <option value={30}>30 min</option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        <button onClick={saveOpeningByDate} disabled={loading} style={styles.saveBtn}>
-          Salva orari
+        <button onClick={saveMax} disabled={loading} style={styles.saveBtn}>
+          Salva
         </button>
+        <button onClick={resetDay} disabled={loading} style={styles.ghostBtn}>
+          Reset giorno
+        </button>
+        {loading && <span style={styles.sub}>…</span>}
       </div>
 
       {/* SLOTS */}
@@ -569,30 +601,111 @@ export default function Page() {
       ) : (
         <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
           {slots.map((slot) => {
-            const left = Math.max(0, maxPerSlot - usedFor(slot));
+            const used = qtyForSlot(slot);
+            const left = Math.max(0, maxPerSlot - used);
             return (
               <SlotCard
                 key={slot}
                 slot={slot}
                 left={left}
-                onSwipeRight={() => increment(slot, 1)}
-                onSwipeLeft={() => decrement(slot, 1)}
-                onPlus3={() => increment(slot, 3)}
-                onMinus3={() => decrement(slot, 3)}
+                onSwipeRight={() => upsertSlotQty(slot, +1)}
+                onSwipeLeft={() => upsertSlotQty(slot, -1)}
+                onPlus3={() => upsertSlotQty(slot, +3)}
+                onMinus3={() => upsertSlotQty(slot, -3)}
               />
             );
           })}
         </div>
       )}
 
-      <div style={{ marginTop: 10, ...styles.sub }}>
-        Tip: swipe → destra +1, sinistra -1
+      <div style={{ marginTop: 10, ...styles.sub }}>Tip: swipe → destra +1, sinistra -1</div>
+    </div>
+  );
+}
+
+// ---------- HOURS POPOVER ----------
+function HoursPopover(props: {
+  isClosed: boolean;
+  setIsClosed: (v: boolean) => void;
+  openHHMM: string;
+  setOpenHHMM: (v: string) => void;
+  closeHHMM: string;
+  setCloseHHMM: (v: string) => void;
+  slotMinutes: number;
+  setSlotMinutes: (v: number) => void;
+  loading: boolean;
+  onSaveOnlyThisDay: () => void;
+  onApplyFromThisDay: () => void;
+  onClose: () => void;
+}) {
+  const {
+    isClosed,
+    setIsClosed,
+    openHHMM,
+    setOpenHHMM,
+    closeHHMM,
+    setCloseHHMM,
+    slotMinutes,
+    setSlotMinutes,
+    loading,
+    onSaveOnlyThisDay,
+    onApplyFromThisDay,
+    onClose,
+  } = props;
+
+  return (
+    <div style={styles.popWrap}>
+      <div style={styles.hoursHead}>
+        <div style={{ fontWeight: 900 }}>Orari</div>
+        <button onClick={onClose} style={styles.xBtn} aria-label="Chiudi">
+          ✕
+        </button>
+      </div>
+
+      <label style={styles.chkRow}>
+        <input type="checkbox" checked={isClosed} onChange={(e) => setIsClosed(e.target.checked)} />
+        <span>Chiuso</span>
+      </label>
+
+      {!isClosed && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <div style={styles.row2}>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={styles.sub}>Da</div>
+              <input type="time" value={openHHMM} onChange={(e) => setOpenHHMM(e.target.value)} style={styles.input} />
+            </div>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={styles.sub}>A</div>
+              <input type="time" value={closeHHMM} onChange={(e) => setCloseHHMM(e.target.value)} style={styles.input} />
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 6 }}>
+            <div style={styles.sub}>Slot</div>
+            <select value={slotMinutes} onChange={(e) => setSlotMinutes(Number(e.target.value))} style={styles.input}>
+              <option value={10}>10 min</option>
+              <option value={15}>15 min</option>
+              <option value={20}>20 min</option>
+              <option value={30}>30 min</option>
+              <option value={60}>60 min</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+        <button onClick={onSaveOnlyThisDay} disabled={loading} style={styles.saveBtn}>
+          Salva SOLO questo giorno
+        </button>
+        <button onClick={onApplyFromThisDay} disabled={loading} style={styles.blackBtn}>
+          Applica DA questo giorno in poi
+        </button>
       </div>
     </div>
   );
 }
 
-// ---------- Slot Card with swipe ----------
+// ---------- SLOT CARD (Pointer swipe robusto) ----------
 function SlotCard(props: {
   slot: string;
   left: number;
@@ -602,36 +715,57 @@ function SlotCard(props: {
   onMinus3: () => void;
 }) {
   const { slot, left, onSwipeRight, onSwipeLeft, onPlus3, onMinus3 } = props;
-  const startX = useRef<number | null>(null);
+
+  const start = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
 
   const bg = left === 0 ? "#fecaca" : left <= 2 ? "#fde68a" : "#bbf7d0";
 
-  function onTouchStart(e: React.TouchEvent) {
-    startX.current = e.touches[0].clientX;
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+    if (target.tagName === "BUTTON") return;
+    start.current = { x: e.clientX, y: e.clientY, active: true };
   }
 
-  function onTouchEnd(e: React.TouchEvent) {
-    if (startX.current == null) return;
-    const endX = e.changedTouches[0].clientX;
-    const dx = endX - startX.current;
-    startX.current = null;
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!start.current.active) return;
+    const dx = e.clientX - start.current.x;
+    const dy = e.clientY - start.current.y;
+    start.current.active = false;
 
-    if (dx > 35) onSwipeRight();
-    else if (dx < -35) onSwipeLeft();
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (dx > 45) onSwipeRight();
+    else if (dx < -45) onSwipeLeft();
+  }
+
+  function onPointerCancel() {
+    start.current.active = false;
   }
 
   return (
-    <div style={{ ...styles.card, background: bg }} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div
+      style={{ ...styles.card, background: bg, touchAction: "pan-y" }}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      title="Swipe: destra +1, sinistra -1"
+    >
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <div style={styles.time}>{slot}</div>
+
+        {/* DISP: più corto + numero più grande */}
         <div style={styles.avail}>
-          Disponibili: <span style={{ fontWeight: 900 }}>{left}</span>
+          <span style={styles.availLabel}>Disp.</span>
+          <span style={styles.availNum}>{left}</span>
         </div>
       </div>
 
       <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={onPlus3} style={styles.smallBtn}>+3</button>
-        <button onClick={onMinus3} style={styles.smallBtnGhost}>-3</button>
+        <button onClick={onPlus3} style={styles.smallBtn}>
+          +3
+        </button>
+        <button onClick={onMinus3} style={styles.smallBtnGhost}>
+          -3
+        </button>
       </div>
     </div>
   );
@@ -646,8 +780,13 @@ const styles: Record<string, React.CSSProperties> = {
   input: { padding: 10, border: "1px solid #ccc", borderRadius: 10 },
 
   primaryBtn: {
-    padding: 12, borderRadius: 10, border: "none",
-    background: "black", color: "white", fontWeight: 900, cursor: "pointer"
+    padding: 12,
+    borderRadius: 10,
+    border: "none",
+    background: "black",
+    color: "white",
+    fontWeight: 900,
+    cursor: "pointer",
   },
 
   panel: {
@@ -658,27 +797,27 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    flexWrap: "wrap"
-  },
-
-  panelCol: {
-    marginTop: 12,
-    padding: 10,
-    border: "1px solid #eee",
-    borderRadius: 12,
-    display: "grid",
-    gap: 10
+    flexWrap: "wrap",
   },
 
   saveBtn: {
-    padding: "8px 10px",
+    padding: "10px 10px",
     borderRadius: 10,
     border: "none",
     background: "#16a34a",
     color: "white",
     fontWeight: 900,
     cursor: "pointer",
-    width: "fit-content"
+  },
+
+  blackBtn: {
+    padding: "10px 10px",
+    borderRadius: 10,
+    border: "none",
+    background: "black",
+    color: "white",
+    fontWeight: 900,
+    cursor: "pointer",
   },
 
   ghostBtn: {
@@ -686,7 +825,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     border: "1px solid #ddd",
     background: "white",
-    cursor: "pointer"
+    cursor: "pointer",
+    fontWeight: 800,
   },
 
   dateBtn: {
@@ -696,7 +836,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "white",
     cursor: "pointer",
     fontWeight: 900,
-    textTransform: "capitalize"
+    textTransform: "capitalize",
   },
 
   card: {
@@ -705,11 +845,26 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 10
+    gap: 10,
   },
 
   time: { fontWeight: 900, fontSize: 16, minWidth: 56 },
-  avail: { fontSize: 13 },
+
+  // DISP styling (nuovo)
+  avail: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 6,
+  },
+  availLabel: {
+    fontSize: 12,
+    fontWeight: 800,
+    color: "#444",
+  },
+  availNum: {
+    fontSize: 20,
+    fontWeight: 900,
+  },
 
   smallBtn: {
     padding: "7px 10px",
@@ -718,7 +873,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: "rgba(255,255,255,0.55)",
     cursor: "pointer",
     fontWeight: 900,
-    fontSize: 13
+    fontSize: 13,
   },
 
   smallBtnGhost: {
@@ -728,18 +883,19 @@ const styles: Record<string, React.CSSProperties> = {
     background: "white",
     cursor: "pointer",
     fontWeight: 900,
-    fontSize: 13
+    fontSize: 13,
   },
 
-  // calendar popover
-  calPopup: {
+  // popover positioning
+  popPos: {
     position: "absolute",
     top: 52,
     left: 10,
     zIndex: 50,
   },
 
-  calWrap: {
+  // generic popover wrap
+  popWrap: {
     width: 300,
     padding: 10,
     borderRadius: 14,
@@ -748,7 +904,8 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 10px 25px rgba(0,0,0,0.12)",
   },
 
-  calHeader: {
+  // calendar header
+  popHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -756,7 +913,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 8,
   },
 
-  calNavBtn: {
+  popNavBtn: {
     width: 34,
     height: 34,
     borderRadius: 10,
@@ -768,36 +925,58 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: "18px",
   },
 
-  calTitle: {
+  popTitle: {
     fontWeight: 900,
     textTransform: "capitalize",
     fontSize: 14,
   },
 
-  calWeekdays: {
+  popWeekdays: {
     display: "grid",
     gridTemplateColumns: "repeat(7, 1fr)",
     gap: 6,
     marginBottom: 6,
   },
 
-  calWeekday: {
+  popWeekday: {
     textAlign: "center",
     fontSize: 12,
     color: "#666",
     fontWeight: 900,
   },
 
-  calGrid: {
+  popGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(7, 1fr)",
     gap: 6,
   },
 
-  calDay: {
+  popDay: {
     height: 38,
     borderRadius: 12,
     background: "white",
     cursor: "pointer",
   },
+
+  // hours popover
+  hoursHead: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+
+  xBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    border: "1px solid #ddd",
+    background: "white",
+    cursor: "pointer",
+    fontWeight: 900,
+  },
+
+  chkRow: { display: "flex", alignItems: "center", gap: 8, fontWeight: 800 },
+
+  row2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
 };
