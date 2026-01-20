@@ -284,12 +284,19 @@ export default function Page() {
   }, [user, selectedDay]);
 
   async function ensureSettingsRow(uid: string) {
-    const s = await supabase.from("settings").select("user_id,max_per_slot").eq("user_id", uid).maybeSingle();
+    const s = await supabase
+      .from("settings")
+      .select("user_id,max_per_slot")
+      .eq("user_id", uid)
+      .maybeSingle();
 
     if (s.data) {
       setMaxPerSlot((s.data as SettingsRow).max_per_slot);
     } else {
-      await supabase.from("settings").upsert({ user_id: uid, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
+      await supabase.from("settings").upsert(
+        { user_id: uid, max_per_slot: maxPerSlot },
+        { onConflict: "user_id" }
+      );
     }
   }
 
@@ -338,7 +345,12 @@ export default function Page() {
   }
 
   async function loadOrders(uid: string) {
-    const o = await supabase.from("orders").select("*").eq("user_id", uid).eq("day", selectedDay);
+    const o = await supabase
+      .from("orders")
+      .select("*")
+      .eq("user_id", uid)
+      .eq("day", selectedDay);
+
     setOrders((o.data as OrderAggRow[]) ?? []);
   }
 
@@ -374,7 +386,10 @@ export default function Page() {
   async function saveMax() {
     if (!user) return;
     setLoading(true);
-    const res = await supabase.from("settings").upsert({ user_id: user.id, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
+    const res = await supabase.from("settings").upsert(
+      { user_id: user.id, max_per_slot: maxPerSlot },
+      { onConflict: "user_id" }
+    );
     setLoading(false);
     if (res.error) alert(res.error.message);
   }
@@ -469,7 +484,11 @@ export default function Page() {
     if (!confirm("Sicuro di azzerare tutti gli ordini di questo giorno?")) return;
 
     setLoading(true);
-    const res = await supabase.from("orders").delete().eq("user_id", user.id).eq("day", selectedDay);
+    const res = await supabase
+      .from("orders")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("day", selectedDay);
     setLoading(false);
 
     if (res.error) alert(res.error.message);
@@ -575,21 +594,25 @@ export default function Page() {
         )}
       </div>
 
-      {/* MAX + RESET */}
-      <div style={styles.panel}>
-        <div style={{ fontWeight: 900 }}>Max/slot</div>
+      {/* MAX + RESET (compatto) */}
+      <div style={styles.panelMax}>
+        <div style={styles.maxLabel}>Max/slot</div>
+
         <input
           type="number"
           value={maxPerSlot}
           onChange={(e) => setMaxPerSlot(Number(e.target.value))}
-          style={{ ...styles.input, width: 90, padding: 8 }}
+          style={styles.maxInput}
         />
-        <button onClick={saveMax} disabled={loading} style={styles.saveBtn}>
+
+        <button onClick={saveMax} disabled={loading} style={styles.maxSaveBtn}>
           Salva
         </button>
-        <button onClick={resetDay} disabled={loading} style={styles.ghostBtn}>
-          Reset giorno
+
+        <button onClick={resetDay} disabled={loading} style={styles.maxResetBtn} title="Reset giorno">
+          Reset
         </button>
+
         {loading && <span style={styles.sub}>…</span>}
       </div>
 
@@ -603,22 +626,25 @@ export default function Page() {
           {slots.map((slot) => {
             const used = qtyForSlot(slot);
             const left = Math.max(0, maxPerSlot - used);
+
             return (
               <SlotCard
                 key={slot}
                 slot={slot}
                 left={left}
-                onSwipeRight={() => upsertSlotQty(slot, +1)}
-                onSwipeLeft={() => upsertSlotQty(slot, -1)}
-                onPlus3={() => upsertSlotQty(slot, +3)}
-                onMinus3={() => upsertSlotQty(slot, -3)}
+                onInc1={() => upsertSlotQty(slot, +1)}
+                onDec1={() => upsertSlotQty(slot, -1)}
+                onInc3={() => upsertSlotQty(slot, +3)}
+                onDec3={() => upsertSlotQty(slot, -3)}
               />
             );
           })}
         </div>
       )}
 
-      <div style={{ marginTop: 10, ...styles.sub }}>Tip: swipe → destra +1, sinistra -1</div>
+      <div style={{ marginTop: 10, ...styles.sub }}>
+        Tip: swipe veloce → +1/-1. Swipe lento a sinistra → opzioni +3/-3.
+      </div>
     </div>
   );
 }
@@ -705,67 +731,144 @@ function HoursPopover(props: {
   );
 }
 
-// ---------- SLOT CARD (Pointer swipe robusto) ----------
+// ---------- SLOT CARD (swipe + azioni laterali) ----------
 function SlotCard(props: {
   slot: string;
   left: number;
-  onSwipeRight: () => void;
-  onSwipeLeft: () => void;
-  onPlus3: () => void;
-  onMinus3: () => void;
+  onInc1: () => void;
+  onDec1: () => void;
+  onInc3: () => void;
+  onDec3: () => void;
 }) {
-  const { slot, left, onSwipeRight, onSwipeLeft, onPlus3, onMinus3 } = props;
+  const { slot, left, onInc1, onDec1, onInc3, onDec3 } = props;
 
-  const start = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
+  const start = useRef({ x: 0, y: 0, t: 0, active: false });
+  const [dragX, setDragX] = useState(0);
+  const [reveal, setReveal] = useState(false);
+  const [flash, setFlash] = useState<"inc" | "dec" | null>(null);
 
   const bg = left === 0 ? "#fecaca" : left <= 2 ? "#fde68a" : "#bbf7d0";
 
-  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+  function begin(e: React.PointerEvent<HTMLDivElement>) {
     const target = e.target as HTMLElement;
     if (target.tagName === "BUTTON") return;
-    start.current = { x: e.clientX, y: e.clientY, active: true };
+
+    start.current = { x: e.clientX, y: e.clientY, t: Date.now(), active: true };
+    setDragX(0);
+    setReveal(false);
   }
 
-  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+  function move(e: React.PointerEvent<HTMLDivElement>) {
     if (!start.current.active) return;
+
     const dx = e.clientX - start.current.x;
     const dy = e.clientY - start.current.y;
+
+    // se scroll verticale -> ignora
+    if (Math.abs(dy) > Math.abs(dx)) return;
+
+    // trascinamento: permetti solo a sinistra (per rivelare azioni)
+    const clamped = Math.max(-110, Math.min(0, dx));
+    setDragX(clamped);
+
+    const elapsed = Date.now() - start.current.t;
+    // swipe lento verso sinistra -> rivela azioni
+    if (elapsed > 220 && clamped < -18) setReveal(true);
+  }
+
+  async function end(e: React.PointerEvent<HTMLDivElement>) {
+    if (!start.current.active) return;
     start.current.active = false;
+
+    const dx = e.clientX - start.current.x;
+    const dy = e.clientY - start.current.y;
+    const elapsed = Date.now() - start.current.t;
+
+    // reset drag position (animato via CSS)
+    setDragX(0);
 
     if (Math.abs(dy) > Math.abs(dx)) return;
-    if (dx > 45) onSwipeRight();
-    else if (dx < -45) onSwipeLeft();
+
+    // caso: swipe lento a sinistra -> resta reveal
+    if (elapsed > 220 && dx < -18) {
+      setReveal(true);
+      return;
+    }
+
+    // swipe veloce: dx > 45 => +1
+    if (dx > 45) {
+      setFlash("inc");
+      onInc1();
+      setTimeout(() => setFlash(null), 140);
+      return;
+    }
+
+    // swipe veloce: dx < -45 => -1
+    if (dx < -45) {
+      setFlash("dec");
+      onDec1();
+      setTimeout(() => setFlash(null), 140);
+      return;
+    }
+
+    // altrimenti chiudi reveal
+    setReveal(false);
   }
 
-  function onPointerCancel() {
+  function cancel() {
     start.current.active = false;
+    setDragX(0);
   }
+
+  const overlayStyle: React.CSSProperties =
+    flash === "inc"
+      ? { ...styles.flash, opacity: 1, transform: "scale(1)" }
+      : flash === "dec"
+      ? { ...styles.flashDec, opacity: 1, transform: "scale(1)" }
+      : { ...styles.flash, opacity: 0, transform: "scale(0.98)" };
 
   return (
-    <div
-      style={{ ...styles.card, background: bg, touchAction: "pan-y" }}
-      onPointerDown={onPointerDown}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      title="Swipe: destra +1, sinistra -1"
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={styles.time}>{slot}</div>
-
-        {/* DISP: più corto + numero più grande */}
-        <div style={styles.avail}>
-          <span style={styles.availLabel}>Disp.</span>
-          <span style={styles.availNum}>{left}</span>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={onPlus3} style={styles.smallBtn}>
+    <div style={styles.slotOuter}>
+      {/* azioni laterali (visibili solo quando reveal=true) */}
+      <div style={{ ...styles.slotActions, opacity: reveal ? 1 : 0, pointerEvents: reveal ? "auto" : "none" }}>
+        <button style={styles.actionBtn} onClick={() => { onInc3(); setReveal(false); }}>
           +3
         </button>
-        <button onClick={onMinus3} style={styles.smallBtnGhost}>
+        <button style={styles.actionBtnGhost} onClick={() => { onDec3(); setReveal(false); }}>
           -3
         </button>
+      </div>
+
+      {/* card principale che scorre */}
+      <div
+        style={{
+          ...styles.cardSlide,
+          background: bg,
+          transform: reveal ? "translateX(-110px)" : `translateX(${dragX}px)`,
+          transition: start.current.active ? "none" : "transform 160ms ease",
+          touchAction: "pan-y",
+        }}
+        onPointerDown={begin}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={cancel}
+        title="Swipe veloce: +1/-1. Swipe lento a sinistra: +3/-3."
+      >
+        <div style={overlayStyle} />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={styles.time}>{slot}</div>
+
+          <div style={styles.avail}>
+            <span style={styles.availLabel}>Disp.</span>
+            <span style={styles.availNum}>{left}</span>
+          </div>
+        </div>
+
+        {/* piccolo hint quando reveal */}
+        <div style={{ fontSize: 12, fontWeight: 900, opacity: reveal ? 1 : 0.35 }}>
+          {reveal ? "Azioni" : " "}
+        </div>
       </div>
     </div>
   );
@@ -798,6 +901,50 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 8,
     flexWrap: "wrap",
+  },
+
+  // MAX COMPACT
+  panelMax: {
+    marginTop: 12,
+    padding: 10,
+    border: "1px solid #eee",
+    borderRadius: 12,
+    display: "grid",
+    gridTemplateColumns: "auto 78px 1fr 1fr",
+    gap: 8,
+    alignItems: "center",
+  },
+
+  maxLabel: { fontWeight: 900 },
+
+  maxInput: {
+    padding: 8,
+    border: "1px solid #ccc",
+    borderRadius: 10,
+    width: "100%",
+    textAlign: "center",
+    fontWeight: 900,
+  },
+
+  maxSaveBtn: {
+    padding: "10px 8px",
+    borderRadius: 10,
+    border: "none",
+    background: "#16a34a",
+    color: "white",
+    fontWeight: 900,
+    cursor: "pointer",
+    width: "100%",
+  },
+
+  maxResetBtn: {
+    padding: "10px 8px",
+    borderRadius: 10,
+    border: "1px solid #ddd",
+    background: "white",
+    fontWeight: 900,
+    cursor: "pointer",
+    width: "100%",
   },
 
   saveBtn: {
@@ -839,60 +986,87 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "capitalize",
   },
 
-  card: {
-    padding: 10,
+  // SLOT container with actions
+  slotOuter: {
+    position: "relative",
+    height: 54,
     borderRadius: 12,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
+    overflow: "hidden",
   },
 
-  time: { fontWeight: 900, fontSize: 16, minWidth: 56 },
-
-  // DISP styling (nuovo)
-  avail: {
+  slotActions: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    height: "100%",
+    width: 110,
     display: "flex",
-    alignItems: "baseline",
     gap: 6,
-  },
-  availLabel: {
-    fontSize: 12,
-    fontWeight: 800,
-    color: "#444",
-  },
-  availNum: {
-    fontSize: 20,
-    fontWeight: 900,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingRight: 8,
   },
 
-  smallBtn: {
-    padding: "7px 10px",
+  actionBtn: {
+    padding: "8px 10px",
     borderRadius: 10,
     border: "1px solid #ddd",
-    background: "rgba(255,255,255,0.55)",
+    background: "rgba(0,0,0,0.06)",
     cursor: "pointer",
     fontWeight: 900,
-    fontSize: 13,
   },
 
-  smallBtnGhost: {
-    padding: "7px 10px",
+  actionBtnGhost: {
+    padding: "8px 10px",
     borderRadius: 10,
     border: "1px solid #ddd",
     background: "white",
     cursor: "pointer",
     fontWeight: 900,
-    fontSize: 13,
+  },
+
+  cardSlide: {
+    height: "100%",
+    borderRadius: 12,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: "0 10px",
+    position: "relative",
+  },
+
+  time: { fontWeight: 900, fontSize: 16, minWidth: 56 },
+
+  // DISP styling
+  avail: { display: "flex", alignItems: "baseline", gap: 6 },
+  availLabel: { fontSize: 12, fontWeight: 800, color: "#444" },
+  availNum: { fontSize: 20, fontWeight: 900 },
+
+  // feedback flash
+  flash: {
+    position: "absolute",
+    inset: 0,
+    borderRadius: 12,
+    background: "rgba(255,255,255,0.35)",
+    opacity: 0,
+    transform: "scale(0.98)",
+    transition: "opacity 120ms ease, transform 120ms ease",
+    pointerEvents: "none",
+  },
+  flashDec: {
+    position: "absolute",
+    inset: 0,
+    borderRadius: 12,
+    background: "rgba(0,0,0,0.08)",
+    opacity: 0,
+    transform: "scale(0.98)",
+    transition: "opacity 120ms ease, transform 120ms ease",
+    pointerEvents: "none",
   },
 
   // popover positioning
-  popPos: {
-    position: "absolute",
-    top: 52,
-    left: 10,
-    zIndex: 50,
-  },
+  popPos: { position: "absolute", top: 52, left: 10, zIndex: 50 },
 
   // generic popover wrap
   popWrap: {
@@ -925,11 +1099,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: "18px",
   },
 
-  popTitle: {
-    fontWeight: 900,
-    textTransform: "capitalize",
-    fontSize: 14,
-  },
+  popTitle: { fontWeight: 900, textTransform: "capitalize", fontSize: 14 },
 
   popWeekdays: {
     display: "grid",
@@ -938,25 +1108,11 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 6,
   },
 
-  popWeekday: {
-    textAlign: "center",
-    fontSize: 12,
-    color: "#666",
-    fontWeight: 900,
-  },
+  popWeekday: { textAlign: "center", fontSize: 12, color: "#666", fontWeight: 900 },
 
-  popGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(7, 1fr)",
-    gap: 6,
-  },
+  popGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 },
 
-  popDay: {
-    height: 38,
-    borderRadius: 12,
-    background: "white",
-    cursor: "pointer",
-  },
+  popDay: { height: 38, borderRadius: 12, background: "white", cursor: "pointer" },
 
   // hours popover
   hoursHead: {
