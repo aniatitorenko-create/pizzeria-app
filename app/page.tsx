@@ -96,16 +96,79 @@ function generateSlotsHHMM(openHHMM: string, closeHHMM: string, slotMinutes: num
   return slots;
 }
 
+// battery helpers
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
+}
+
+// prefers dark mode
+function usePrefersDark() {
+  const [dark, setDark] = useState(false);
+  useEffect(() => {
+    const m = window.matchMedia?.("(prefers-color-scheme: dark)");
+    if (!m) return;
+    const onChange = () => setDark(!!m.matches);
+    onChange();
+    m.addEventListener?.("change", onChange);
+    return () => m.removeEventListener?.("change", onChange);
+  }, []);
+  return dark;
+}
+
+// p=1 pieno (verde) -> p=0 vuoto (rosso) | versione più tenue + leggibile in dark
+function batteryColor(p: number, dark: boolean) {
+  const hue = 120 * clamp01(p); // 0=rosso, 120=verde
+  const sat = dark ? 45 : 55;
+  const light = dark ? 32 : 78;
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
+// CSS vars per light/dark automatico
+function ThemeVars() {
+  return (
+    <style>{`
+      :root{
+        --bg:#fafafa;
+        --fg:#111827;
+        --muted:#6b7280;
+
+        --panel-bg:#ffffff;
+        --card-bg:#ffffff;
+        --border:rgba(17,24,39,.10);
+
+        --btn-bg:rgba(17,24,39,.06);
+        --btn-bg-strong:rgba(17,24,39,.10);
+
+        --shadow:0 10px 25px rgba(0,0,0,.10);
+        --battery-track:rgba(17,24,39,.06);
+      }
+      @media (prefers-color-scheme: dark){
+        :root{
+          --bg:#0b0c10;
+          --fg:#f3f4f6;
+          --muted:rgba(243,244,246,.70);
+
+          --panel-bg:rgba(255,255,255,.05);
+          --card-bg:rgba(255,255,255,.06);
+          --border:rgba(255,255,255,.12);
+
+          --btn-bg:rgba(255,255,255,.08);
+          --btn-bg-strong:rgba(255,255,255,.12);
+
+          --shadow:0 10px 25px rgba(0,0,0,.35);
+          --battery-track:rgba(255,255,255,.08);
+        }
+      }
+    `}</style>
+  );
+}
+
 // ---------- MINI CALENDAR ----------
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
 function isSameDay(a: Date, b: Date) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 function isToday(d: Date) {
   return isSameDay(d, new Date());
@@ -187,11 +250,11 @@ function CalendarPopover(props: {
           const cellStyle: React.CSSProperties = {
             ...styles.popDay,
             opacity: inMonth ? 1 : 0.35,
-            border: sel ? "2px solid black" : "1px solid #e5e5e5",
+            border: sel ? "2px solid var(--fg)" : "1px solid var(--border)",
             fontWeight: sel ? 900 : 800,
           };
 
-          if (today && !sel) cellStyle.border = "1px solid #999";
+          if (today && !sel) cellStyle.border = "1px solid rgba(127,127,127,0.65)";
 
           return (
             <button key={`${d.toISOString()}-${idx}`} onClick={() => pick(d)} style={cellStyle}>
@@ -207,6 +270,7 @@ function CalendarPopover(props: {
 // ---------- PAGE ----------
 export default function Page() {
   const [user, setUser] = useState<User | null>(null);
+  const dark = usePrefersDark();
 
   // login
   const [email, setEmail] = useState("");
@@ -284,19 +348,12 @@ export default function Page() {
   }, [user, selectedDay]);
 
   async function ensureSettingsRow(uid: string) {
-    const s = await supabase
-      .from("settings")
-      .select("user_id,max_per_slot")
-      .eq("user_id", uid)
-      .maybeSingle();
+    const s = await supabase.from("settings").select("user_id,max_per_slot").eq("user_id", uid).maybeSingle();
 
     if (s.data) {
       setMaxPerSlot((s.data as SettingsRow).max_per_slot);
     } else {
-      await supabase.from("settings").upsert(
-        { user_id: uid, max_per_slot: maxPerSlot },
-        { onConflict: "user_id" }
-      );
+      await supabase.from("settings").upsert({ user_id: uid, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
     }
   }
 
@@ -345,12 +402,7 @@ export default function Page() {
   }
 
   async function loadOrders(uid: string) {
-    const o = await supabase
-      .from("orders")
-      .select("*")
-      .eq("user_id", uid)
-      .eq("day", selectedDay);
-
+    const o = await supabase.from("orders").select("*").eq("user_id", uid).eq("day", selectedDay);
     setOrders((o.data as OrderAggRow[]) ?? []);
   }
 
@@ -386,10 +438,9 @@ export default function Page() {
   async function saveMax() {
     if (!user) return;
     setLoading(true);
-    const res = await supabase.from("settings").upsert(
-      { user_id: user.id, max_per_slot: maxPerSlot },
-      { onConflict: "user_id" }
-    );
+    const res = await supabase
+      .from("settings")
+      .upsert({ user_id: user.id, max_per_slot: maxPerSlot }, { onConflict: "user_id" });
     setLoading(false);
     if (res.error) alert(res.error.message);
   }
@@ -484,11 +535,7 @@ export default function Page() {
     if (!confirm("Sicuro di azzerare tutti gli ordini di questo giorno?")) return;
 
     setLoading(true);
-    const res = await supabase
-      .from("orders")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("day", selectedDay);
+    const res = await supabase.from("orders").delete().eq("user_id", user.id).eq("day", selectedDay);
     setLoading(false);
 
     if (res.error) alert(res.error.message);
@@ -505,6 +552,7 @@ export default function Page() {
   if (!user) {
     return (
       <div style={styles.wrap}>
+        <ThemeVars />
         <h1 style={styles.title}>Pizzeria - Slot</h1>
         <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
           <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={styles.input} />
@@ -525,6 +573,8 @@ export default function Page() {
 
   return (
     <div style={styles.wrap} ref={popWrapRef}>
+      <ThemeVars />
+
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
         <div>
           <h1 style={styles.title}>Disponibilità</h1>
@@ -618,11 +668,11 @@ export default function Page() {
 
       {/* SLOTS */}
       {isClosed ? (
-        <div style={{ marginTop: 10, padding: 12, borderRadius: 12, border: "1px solid #eee" }}>
+        <div style={{ marginTop: 10, padding: 12, borderRadius: 12, border: "1px solid var(--border)", background: "var(--panel-bg)" }}>
           <b>Chiuso</b> per questa data.
         </div>
       ) : (
-        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
           {slots.map((slot) => {
             const used = qtyForSlot(slot);
             const left = Math.max(0, maxPerSlot - used);
@@ -632,10 +682,9 @@ export default function Page() {
                 key={slot}
                 slot={slot}
                 left={left}
-                onInc1={() => upsertSlotQty(slot, +1)}
-                onDec1={() => upsertSlotQty(slot, -1)}
-                onInc3={() => upsertSlotQty(slot, +3)}
-                onDec3={() => upsertSlotQty(slot, -3)}
+                max={maxPerSlot}
+                dark={dark}
+                onDelta={(delta) => upsertSlotQty(slot, delta)}
               />
             );
           })}
@@ -643,7 +692,7 @@ export default function Page() {
       )}
 
       <div style={{ marginTop: 10, ...styles.sub }}>
-        Tip: swipe veloce → +1/-1. Swipe lento a sinistra → opzioni +3/-3.
+        Tip: tasti +/− = +1/−1. <b>Tieni premuto</b> sulla riga per aprire +2… / −2… (tap sull’orario per chiudere).
       </div>
     </div>
   );
@@ -731,143 +780,234 @@ function HoursPopover(props: {
   );
 }
 
-// ---------- SLOT CARD (swipe + azioni laterali) ----------
+// ---------- SLOT CARD (tasti +/- + tap lungo per menu “+2.. / -2..”) ----------
 function SlotCard(props: {
   slot: string;
   left: number;
-  onInc1: () => void;
-  onDec1: () => void;
-  onInc3: () => void;
-  onDec3: () => void;
+  max: number;
+  dark: boolean;
+  onDelta: (delta: number) => void;
 }) {
-  const { slot, left, onInc1, onDec1, onInc3, onDec3 } = props;
+  const { slot, left, max, dark, onDelta } = props;
 
-  const start = useRef({ x: 0, y: 0, t: 0, active: false });
-  const [dragX, setDragX] = useState(0);
-  const [reveal, setReveal] = useState(false);
-  const [flash, setFlash] = useState<"inc" | "dec" | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const bg = left === 0 ? "#fecaca" : left <= 2 ? "#fde68a" : "#bbf7d0";
+  // long press
+  const press = useRef<{
+    active: boolean;
+    x: number;
+    y: number;
+    timer: number | null;
+  }>({ active: false, x: 0, y: 0, timer: null });
 
-  function begin(e: React.PointerEvent<HTMLDivElement>) {
+  const used = Math.max(0, max - left);
+
+  // menu options: +2..+left, -2..-used
+  const incOptions = useMemo(() => {
+    const n = Math.max(0, left);
+    const arr: number[] = [];
+    for (let k = 2; k <= n; k++) arr.push(k);
+    return arr;
+  }, [left]);
+
+  const decOptions = useMemo(() => {
+    const n = Math.max(0, used);
+    const arr: number[] = [];
+    for (let k = 2; k <= n; k++) arr.push(k);
+    return arr;
+  }, [used]);
+
+  // batteria
+  const pct = clamp01(max > 0 ? left / max : 0);
+  const fillW = `${Math.round(pct * 100)}%`;
+  const fillColor = batteryColor(pct, dark);
+
+  function clearTimer() {
+    if (press.current.timer) {
+      window.clearTimeout(press.current.timer);
+      press.current.timer = null;
+    }
+  }
+
+  function onCardPointerDown(e: React.PointerEvent<HTMLDivElement>) {
     const target = e.target as HTMLElement;
     if (target.tagName === "BUTTON") return;
+    if (menuOpen) return;
 
-    start.current = { x: e.clientX, y: e.clientY, t: Date.now(), active: true };
-    setDragX(0);
-    setReveal(false);
+    press.current.active = true;
+    press.current.x = e.clientX;
+    press.current.y = e.clientY;
+
+    clearTimer();
+    press.current.timer = window.setTimeout(() => {
+      setMenuOpen(true);
+      press.current.active = false;
+      clearTimer();
+    }, 420);
   }
 
-  function move(e: React.PointerEvent<HTMLDivElement>) {
-    if (!start.current.active) return;
+  function onCardPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!press.current.active) return;
 
-    const dx = e.clientX - start.current.x;
-    const dy = e.clientY - start.current.y;
+    const dx = Math.abs(e.clientX - press.current.x);
+    const dy = Math.abs(e.clientY - press.current.y);
 
-    // se scroll verticale -> ignora
-    if (Math.abs(dy) > Math.abs(dx)) return;
-
-    // trascinamento: permetti solo a sinistra (per rivelare azioni)
-    const clamped = Math.max(-110, Math.min(0, dx));
-    setDragX(clamped);
-
-    const elapsed = Date.now() - start.current.t;
-    // swipe lento verso sinistra -> rivela azioni
-    if (elapsed > 220 && clamped < -18) setReveal(true);
-  }
-
-  async function end(e: React.PointerEvent<HTMLDivElement>) {
-    if (!start.current.active) return;
-    start.current.active = false;
-
-    const dx = e.clientX - start.current.x;
-    const dy = e.clientY - start.current.y;
-    const elapsed = Date.now() - start.current.t;
-
-    // reset drag position (animato via CSS)
-    setDragX(0);
-
-    if (Math.abs(dy) > Math.abs(dx)) return;
-
-    // caso: swipe lento a sinistra -> resta reveal
-    if (elapsed > 220 && dx < -18) {
-      setReveal(true);
-      return;
+    if (dx > 10 || dy > 10) {
+      press.current.active = false;
+      clearTimer();
     }
-
-    // swipe veloce: dx > 45 => +1
-    if (dx > 45) {
-      setFlash("inc");
-      onInc1();
-      setTimeout(() => setFlash(null), 140);
-      return;
-    }
-
-    // swipe veloce: dx < -45 => -1
-    if (dx < -45) {
-      setFlash("dec");
-      onDec1();
-      setTimeout(() => setFlash(null), 140);
-      return;
-    }
-
-    // altrimenti chiudi reveal
-    setReveal(false);
   }
 
-  function cancel() {
-    start.current.active = false;
-    setDragX(0);
+  function onCardPointerUp() {
+    press.current.active = false;
+    clearTimer();
   }
 
-  const overlayStyle: React.CSSProperties =
-    flash === "inc"
-      ? { ...styles.flash, opacity: 1, transform: "scale(1)" }
-      : flash === "dec"
-      ? { ...styles.flashDec, opacity: 1, transform: "scale(1)" }
-      : { ...styles.flash, opacity: 0, transform: "scale(0.98)" };
+  function onCardPointerCancel() {
+    press.current.active = false;
+    clearTimer();
+  }
 
   return (
     <div style={styles.slotOuter}>
-      {/* azioni laterali (visibili solo quando reveal=true) */}
-      <div style={{ ...styles.slotActions, opacity: reveal ? 1 : 0, pointerEvents: reveal ? "auto" : "none" }}>
-        <button style={styles.actionBtn} onClick={() => { onInc3(); setReveal(false); }}>
-          +3
-        </button>
-        <button style={styles.actionBtnGhost} onClick={() => { onDec3(); setReveal(false); }}>
-          -3
-        </button>
-      </div>
-
-      {/* card principale che scorre */}
+      {/* card */}
       <div
-        style={{
-          ...styles.cardSlide,
-          background: bg,
-          transform: reveal ? "translateX(-110px)" : `translateX(${dragX}px)`,
-          transition: start.current.active ? "none" : "transform 160ms ease",
-          touchAction: "pan-y",
-        }}
-        onPointerDown={begin}
-        onPointerMove={move}
-        onPointerUp={end}
-        onPointerCancel={cancel}
-        title="Swipe veloce: +1/-1. Swipe lento a sinistra: +3/-3."
+        style={styles.cardSlide}
+        onPointerDown={onCardPointerDown}
+        onPointerMove={onCardPointerMove}
+        onPointerUp={onCardPointerUp}
+        onPointerCancel={onCardPointerCancel}
+        onContextMenu={(e) => e.preventDefault()}
+        title="Tasti: +1/-1. Tieni premuto sulla riga: +2.. / -2.."
       >
-        <div style={overlayStyle} />
+        {/* barra batteria */}
+        <div style={styles.batteryTrack} aria-hidden="true">
+          <div
+            style={{
+              ...styles.batteryFill,
+              width: fillW,
+              background: fillColor,
+            }}
+          />
+        </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={styles.time}>{slot}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, position: "relative", width: "100%" }}>
+          {/* orario: tap per chiudere menu */}
+          <div
+            style={styles.time}
+            onPointerDown={(e) => {
+              if (menuOpen) {
+                e.stopPropagation();
+                setMenuOpen(false);
+              }
+            }}
+            onClick={() => {
+              if (menuOpen) setMenuOpen(false);
+            }}
+            role="button"
+            aria-label={menuOpen ? "Chiudi menu" : "Orario"}
+            tabIndex={0}
+          >
+            {slot}
+          </div>
 
           <div style={styles.avail}>
             <span style={styles.availLabel}>Disp.</span>
             <span style={styles.availNum}>{left}</span>
           </div>
+
+          {/* tasti sempre visibili per -1 / +1 */}
+          <div style={styles.stepper}>
+            <button
+              type="button"
+              style={styles.stepBtnMinus}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelta(-1);
+              }}
+              aria-label="Meno 1"
+              title="-1"
+            >
+              −
+            </button>
+
+            <button
+              type="button"
+              style={styles.stepBtnPlus}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelta(+1);
+              }}
+              aria-label="Più 1"
+              title="+1"
+            >
+              +
+            </button>
+          </div>
         </div>
 
-        {/* piccolo hint quando reveal */}
-        <div style={{ fontSize: 12, fontWeight: 900, opacity: reveal ? 1 : 0.35 }}>
-          {reveal ? "Azioni" : " "}
+        <div style={{ fontSize: 12, fontWeight: 900, opacity: menuOpen ? 1 : 0.35, position: "relative", color: "var(--muted)" }}>
+          {menuOpen ? "Menu rapido (tap su orario per chiudere)" : " "}
+        </div>
+      </div>
+
+      {/* menu a comparsa sotto */}
+      <div
+        style={{
+          ...styles.menuPanel,
+          maxHeight: menuOpen ? 220 : 0,
+          opacity: menuOpen ? 1 : 0,
+          transform: menuOpen ? "translateY(0px)" : "translateY(-6px)",
+          pointerEvents: menuOpen ? "auto" : "none",
+        }}
+        aria-hidden={!menuOpen}
+      >
+        <div style={styles.menuHint}>
+          Opzioni rapide: <b>−2…</b> (fino a {used}) &nbsp; | &nbsp; <b>+2…</b> (fino a {left})
+        </div>
+
+        <div style={styles.menuRow}>
+          {/* decrementi */}
+          {decOptions.length === 0 ? (
+            <span style={styles.menuEmpty}>Nessun −2 disponibile</span>
+          ) : (
+            decOptions.map((n) => (
+              <button
+                key={`dec-${n}`}
+                style={styles.menuChipGhost}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelta(-n);
+                  setMenuOpen(false); // ✅ chiusura automatica
+                }}
+                title={`-${n}`}
+              >
+                −{n}
+              </button>
+            ))
+          )}
+
+          <div style={styles.menuSep} />
+
+          {/* incrementi */}
+          {incOptions.length === 0 ? (
+            <span style={styles.menuEmpty}>Nessun +2 disponibile</span>
+          ) : (
+            incOptions.map((n) => (
+              <button
+                key={`inc-${n}`}
+                style={styles.menuChip}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelta(+n);
+                  setMenuOpen(false); // ✅ chiusura automatica
+                }}
+                title={`+${n}`}
+              >
+                +{n}
+              </button>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -876,72 +1016,91 @@ function SlotCard(props: {
 
 // ---------- STYLES ----------
 const styles: Record<string, React.CSSProperties> = {
-  wrap: { maxWidth: 420, margin: "0 auto", padding: 14 },
-  title: { fontSize: 20, fontWeight: 900, margin: 0 },
-  sub: { color: "#555", fontSize: 12 },
+  wrap: {
+    maxWidth: 420,
+    margin: "0 auto",
+    padding: 12,
+    background: "var(--bg)",
+    color: "var(--fg)",
+    minHeight: "100vh",
+  },
+  title: { fontSize: 20, fontWeight: 900, margin: 0, letterSpacing: -0.2 },
+  sub: { color: "var(--muted)", fontSize: 12 },
 
-  input: { padding: 10, border: "1px solid #ccc", borderRadius: 10 },
+  input: {
+    padding: 10,
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    background: "var(--panel-bg)",
+    color: "var(--fg)",
+  },
 
   primaryBtn: {
     padding: 12,
     borderRadius: 10,
     border: "none",
-    background: "black",
-    color: "white",
+    background: "var(--fg)",
+    color: "var(--bg)",
     fontWeight: 900,
     cursor: "pointer",
   },
 
   panel: {
-    marginTop: 12,
-    padding: 10,
-    border: "1px solid #eee",
+    marginTop: 10,
+    padding: 8,
+    border: "1px solid var(--border)",
     borderRadius: 12,
     display: "flex",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
     flexWrap: "wrap",
+    background: "var(--panel-bg)",
+    boxShadow: "var(--shadow)",
   },
 
-  // MAX COMPACT
   panelMax: {
-    marginTop: 12,
-    padding: 10,
-    border: "1px solid #eee",
+    marginTop: 10,
+    padding: 8,
+    border: "1px solid var(--border)",
     borderRadius: 12,
     display: "grid",
-    gridTemplateColumns: "auto 78px 1fr 1fr",
-    gap: 8,
+    gridTemplateColumns: "auto 70px 1fr 1fr",
+    gap: 6,
     alignItems: "center",
+    background: "var(--panel-bg)",
+    boxShadow: "var(--shadow)",
   },
 
   maxLabel: { fontWeight: 900 },
 
   maxInput: {
-    padding: 8,
-    border: "1px solid #ccc",
+    padding: 7,
+    border: "1px solid var(--border)",
     borderRadius: 10,
     width: "100%",
     textAlign: "center",
     fontWeight: 900,
+    background: "var(--card-bg)",
+    color: "var(--fg)",
   },
 
   maxSaveBtn: {
-    padding: "10px 8px",
+    padding: "9px 8px",
     borderRadius: 10,
-    border: "none",
-    background: "#16a34a",
-    color: "white",
+    border: "1px solid var(--border)",
+    background: "var(--btn-bg-strong)",
+    color: "var(--fg)",
     fontWeight: 900,
     cursor: "pointer",
     width: "100%",
   },
 
   maxResetBtn: {
-    padding: "10px 8px",
+    padding: "9px 8px",
     borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
     fontWeight: 900,
     cursor: "pointer",
     width: "100%",
@@ -950,9 +1109,9 @@ const styles: Record<string, React.CSSProperties> = {
   saveBtn: {
     padding: "10px 10px",
     borderRadius: 10,
-    border: "none",
-    background: "#16a34a",
-    color: "white",
+    border: "1px solid var(--border)",
+    background: "var(--btn-bg-strong)",
+    color: "var(--fg)",
     fontWeight: 900,
     cursor: "pointer",
   },
@@ -961,138 +1120,182 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 10px",
     borderRadius: 10,
     border: "none",
-    background: "black",
-    color: "white",
+    background: "var(--fg)",
+    color: "var(--bg)",
     fontWeight: 900,
     cursor: "pointer",
   },
 
   ghostBtn: {
-    padding: "8px 10px",
+    padding: "6px 8px",
     borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
     cursor: "pointer",
     fontWeight: 800,
   },
 
   dateBtn: {
-    padding: "8px 10px",
+    padding: "6px 8px",
     borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
     cursor: "pointer",
     fontWeight: 900,
     textTransform: "capitalize",
   },
 
-  // SLOT container with actions
-  slotOuter: {
-    position: "relative",
-    height: 54,
-    borderRadius: 12,
-    overflow: "hidden",
-  },
+  slotOuter: { display: "grid", gap: 6 },
 
-  slotActions: {
-    position: "absolute",
-    top: 0,
-    right: 0,
-    height: "100%",
-    width: 110,
-    display: "flex",
-    gap: 6,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingRight: 8,
-  },
-
-  actionBtn: {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "rgba(0,0,0,0.06)",
-    cursor: "pointer",
-    fontWeight: 900,
-  },
-
-  actionBtnGhost: {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
-    cursor: "pointer",
-    fontWeight: 900,
-  },
-
+  // ✅ slot più compatti
   cardSlide: {
-    height: "100%",
+    height: 46,
     borderRadius: 12,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    padding: "0 10px",
-    position: "relative",
-  },
-
-  time: { fontWeight: 900, fontSize: 16, minWidth: 56 },
-
-  // DISP styling
-  avail: { display: "flex", alignItems: "baseline", gap: 6 },
-  availLabel: { fontSize: 12, fontWeight: 800, color: "#444" },
-  availNum: { fontSize: 20, fontWeight: 900 },
-
-  // feedback flash
-  flash: {
-    position: "absolute",
-    inset: 0,
-    borderRadius: 12,
-    background: "rgba(255,255,255,0.35)",
-    opacity: 0,
-    transform: "scale(0.98)",
-    transition: "opacity 120ms ease, transform 120ms ease",
-    pointerEvents: "none",
-  },
-  flashDec: {
-    position: "absolute",
-    inset: 0,
-    borderRadius: 12,
-    background: "rgba(0,0,0,0.08)",
-    opacity: 0,
-    transform: "scale(0.98)",
-    transition: "opacity 120ms ease, transform 120ms ease",
-    pointerEvents: "none",
-  },
-
-  // popover positioning
-  popPos: { position: "absolute", top: 52, left: 10, zIndex: 50 },
-
-  // generic popover wrap
-  popWrap: {
-    width: 300,
-    padding: 10,
-    borderRadius: 14,
-    border: "1px solid #e5e5e5",
-    background: "white",
-    boxShadow: "0 10px 25px rgba(0,0,0,0.12)",
-  },
-
-  // calendar header
-  popHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
-    marginBottom: 8,
+    padding: "0 8px",
+    position: "relative",
+    background: "var(--card-bg)",
+    border: "1px solid var(--border)",
+    touchAction: "pan-y",
+    userSelect: "none",
+    WebkitUserSelect: "none",
   },
+
+  // batteria tenue
+  batteryTrack: {
+    position: "absolute",
+    inset: 5,
+    borderRadius: 10,
+    background: "var(--battery-track)",
+    overflow: "hidden",
+    pointerEvents: "none",
+  },
+
+  batteryFill: {
+    height: "100%",
+    borderRadius: 10,
+    width: "0%",
+    transition: "width 220ms ease, background-color 220ms ease",
+    willChange: "width",
+    opacity: 0.55,
+  },
+
+  time: {
+    fontWeight: 900,
+    fontSize: 15,
+    minWidth: 48,
+    position: "relative",
+    cursor: "pointer",
+    letterSpacing: -0.2,
+  },
+
+  avail: { display: "flex", alignItems: "baseline", gap: 6, position: "relative" },
+  availLabel: { fontSize: 12, fontWeight: 800, color: "var(--muted)" },
+  availNum: { fontSize: 18, fontWeight: 900 },
+
+  stepper: { marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", position: "relative" },
+
+  stepBtnMinus: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
+    fontWeight: 900,
+    fontSize: 18,
+    cursor: "pointer",
+    lineHeight: "18px",
+  },
+
+  stepBtnPlus: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    border: "1px solid var(--border)",
+    background: "var(--btn-bg)",
+    color: "var(--fg)",
+    fontWeight: 900,
+    fontSize: 18,
+    cursor: "pointer",
+    lineHeight: "18px",
+  },
+
+  menuPanel: {
+    borderRadius: 12,
+    border: "1px solid var(--border)",
+    background: "var(--panel-bg)",
+    padding: 10,
+    overflow: "hidden",
+    transition: "max-height 180ms ease, opacity 180ms ease, transform 180ms ease",
+    boxShadow: "var(--shadow)",
+  },
+
+  menuHint: { fontSize: 12, color: "var(--muted)", fontWeight: 800, marginBottom: 8 },
+
+  menuRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    overflowX: "auto",
+    paddingBottom: 2,
+    WebkitOverflowScrolling: "touch",
+  },
+
+  menuSep: { width: 1, alignSelf: "stretch", background: "var(--border)", margin: "0 2px", flex: "0 0 auto" },
+
+  menuChip: {
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid var(--border)",
+    background: "var(--btn-bg)",
+    color: "var(--fg)",
+    cursor: "pointer",
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+    flex: "0 0 auto",
+  },
+
+  menuChipGhost: {
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
+    cursor: "pointer",
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+    flex: "0 0 auto",
+  },
+
+  menuEmpty: { fontSize: 12, color: "var(--muted)", fontWeight: 800, whiteSpace: "nowrap", flex: "0 0 auto" },
+
+  popPos: { position: "absolute", top: 46, left: 8, zIndex: 50 },
+
+  popWrap: {
+    width: 300,
+    padding: 10,
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    background: "var(--panel-bg)",
+    boxShadow: "var(--shadow)",
+    color: "var(--fg)",
+  },
+
+  popHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 },
 
   popNavBtn: {
     width: 34,
     height: 34,
     borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
     cursor: "pointer",
     fontWeight: 900,
     fontSize: 18,
@@ -1101,33 +1304,28 @@ const styles: Record<string, React.CSSProperties> = {
 
   popTitle: { fontWeight: 900, textTransform: "capitalize", fontSize: 14 },
 
-  popWeekdays: {
-    display: "grid",
-    gridTemplateColumns: "repeat(7, 1fr)",
-    gap: 6,
-    marginBottom: 6,
-  },
-
-  popWeekday: { textAlign: "center", fontSize: 12, color: "#666", fontWeight: 900 },
+  popWeekdays: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6, marginBottom: 6 },
+  popWeekday: { textAlign: "center", fontSize: 12, color: "var(--muted)", fontWeight: 900 },
 
   popGrid: { display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 },
 
-  popDay: { height: 38, borderRadius: 12, background: "white", cursor: "pointer" },
-
-  // hours popover
-  hoursHead: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 8,
+  popDay: {
+    height: 38,
+    borderRadius: 12,
+    background: "transparent",
+    color: "var(--fg)",
+    cursor: "pointer",
   },
+
+  hoursHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
 
   xBtn: {
     width: 34,
     height: 34,
     borderRadius: 10,
-    border: "1px solid #ddd",
-    background: "white",
+    border: "1px solid var(--border)",
+    background: "transparent",
+    color: "var(--fg)",
     cursor: "pointer",
     fontWeight: 900,
   },
