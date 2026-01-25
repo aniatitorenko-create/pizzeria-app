@@ -115,12 +115,12 @@ function usePrefersDark() {
   return dark;
 }
 
-// p=1 pieno (verde) -> p=0 vuoto (rosso) | versione più tenue + leggibile in dark
+// batteria: palette soft (teal/ambra/rosso) + leggibile in dark
 function batteryColor(p: number, dark: boolean) {
-  const hue = 120 * clamp01(p); // 0=rosso, 120=verde
-  const sat = dark ? 45 : 55;
-  const light = dark ? 32 : 78;
-  return `hsl(${hue}, ${sat}%, ${light}%)`;
+  const x = clamp01(p);
+  if (x >= 0.66) return dark ? "hsl(170, 45%, 42%)" : "hsl(170, 45%, 62%)";
+  if (x >= 0.33) return dark ? "hsl(38, 55%, 46%)" : "hsl(38, 55%, 66%)";
+  return dark ? "hsl(8, 55%, 48%)" : "hsl(8, 55%, 70%)";
 }
 
 // CSS vars per light/dark automatico
@@ -140,7 +140,8 @@ function ThemeVars() {
         --btn-bg-strong:rgba(17,24,39,.10);
 
         --shadow:0 10px 25px rgba(0,0,0,.10);
-        --battery-track:rgba(17,24,39,.06);
+
+        --bar-track:rgba(17,24,39,.10);
       }
       @media (prefers-color-scheme: dark){
         :root{
@@ -156,7 +157,8 @@ function ThemeVars() {
           --btn-bg-strong:rgba(255,255,255,.12);
 
           --shadow:0 10px 25px rgba(0,0,0,.35);
-          --battery-track:rgba(255,255,255,.08);
+
+          --bar-track:rgba(255,255,255,.14);
         }
       }
     `}</style>
@@ -672,7 +674,7 @@ export default function Page() {
           <b>Chiuso</b> per questa data.
         </div>
       ) : (
-        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+        <div style={{ marginTop: 10, display: "grid", gap: 4 }}>
           {slots.map((slot) => {
             const used = qtyForSlot(slot);
             const left = Math.max(0, maxPerSlot - used);
@@ -821,6 +823,7 @@ function SlotCard(props: {
   const pct = clamp01(max > 0 ? left / max : 0);
   const fillW = `${Math.round(pct * 100)}%`;
   const fillColor = batteryColor(pct, dark);
+  const fillOpacity = dark ? 0.18 : 0.22;
 
   function clearTimer() {
     if (press.current.timer) {
@@ -878,15 +881,16 @@ function SlotCard(props: {
         onPointerUp={onCardPointerUp}
         onPointerCancel={onCardPointerCancel}
         onContextMenu={(e) => e.preventDefault()}
-        title="Tasti: +1/-1. Tieni premuto sulla riga: +2.. / -2.."
+        title="Tasti: +1/-1. Tieni premuto: +-2.."
       >
-        {/* barra batteria */}
-        <div style={styles.batteryTrack} aria-hidden="true">
+        {/* riempimento “batteria” su tutta la riga */}
+        <div style={styles.slotFillTrack} aria-hidden="true">
           <div
             style={{
-              ...styles.batteryFill,
+              ...styles.slotFill,
               width: fillW,
               background: fillColor,
+              opacity: fillOpacity,
             }}
           />
         </div>
@@ -946,12 +950,11 @@ function SlotCard(props: {
           </div>
         </div>
 
-        <div style={{ fontSize: 12, fontWeight: 900, opacity: menuOpen ? 1 : 0.35, position: "relative", color: "var(--muted)" }}>
-          {menuOpen ? "Menu rapido (tap su orario per chiudere)" : " "}
-        </div>
+        {/* niente testo “spiegoni” */}
+        <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.0 }}>.</div>
       </div>
 
-      {/* menu a comparsa sotto */}
+      {/* menu a comparsa: SOLO chip (niente parole) */}
       <div
         style={{
           ...styles.menuPanel,
@@ -959,18 +962,15 @@ function SlotCard(props: {
           opacity: menuOpen ? 1 : 0,
           transform: menuOpen ? "translateY(0px)" : "translateY(-6px)",
           pointerEvents: menuOpen ? "auto" : "none",
+          padding: menuOpen ? 10 : 0,
+          borderWidth: menuOpen ? 1 : 0,
+          marginTop: menuOpen ? 6 : 0,
         }}
         aria-hidden={!menuOpen}
       >
-        <div style={styles.menuHint}>
-          Opzioni rapide: <b>−2…</b> (fino a {used}) &nbsp; | &nbsp; <b>+2…</b> (fino a {left})
-        </div>
-
         <div style={styles.menuRow}>
           {/* decrementi */}
-          {decOptions.length === 0 ? (
-            <span style={styles.menuEmpty}>Nessun −2 disponibile</span>
-          ) : (
+          {decOptions.length !== 0 &&
             decOptions.map((n) => (
               <button
                 key={`dec-${n}`}
@@ -978,21 +978,18 @@ function SlotCard(props: {
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelta(-n);
-                  setMenuOpen(false); // ✅ chiusura automatica
+                  setMenuOpen(false);
                 }}
                 title={`-${n}`}
               >
                 −{n}
               </button>
-            ))
-          )}
+            ))}
 
-          <div style={styles.menuSep} />
+          {(decOptions.length !== 0 && incOptions.length !== 0) && <div style={styles.menuSep} />}
 
           {/* incrementi */}
-          {incOptions.length === 0 ? (
-            <span style={styles.menuEmpty}>Nessun +2 disponibile</span>
-          ) : (
+          {incOptions.length !== 0 &&
             incOptions.map((n) => (
               <button
                 key={`inc-${n}`}
@@ -1000,14 +997,13 @@ function SlotCard(props: {
                 onClick={(e) => {
                   e.stopPropagation();
                   onDelta(+n);
-                  setMenuOpen(false); // ✅ chiusura automatica
+                  setMenuOpen(false);
                 }}
                 title={`+${n}`}
               >
                 +{n}
               </button>
-            ))
-          )}
+            ))}
         </div>
       </div>
     </div>
@@ -1147,11 +1143,10 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "capitalize",
   },
 
-  slotOuter: { display: "grid", gap: 6 },
+  slotOuter: { display: "grid" },
 
-  // ✅ slot più compatti
   cardSlide: {
-    height: 46,
+    height: 44,
     borderRadius: 12,
     display: "flex",
     alignItems: "center",
@@ -1164,25 +1159,23 @@ const styles: Record<string, React.CSSProperties> = {
     touchAction: "pan-y",
     userSelect: "none",
     WebkitUserSelect: "none",
+    overflow: "hidden",
   },
 
-  // batteria tenue
-  batteryTrack: {
+  // ✅ RIEMPIMENTO FULL (batteria su tutta la fascia)
+  slotFillTrack: {
     position: "absolute",
-    inset: 5,
-    borderRadius: 10,
-    background: "var(--battery-track)",
+    inset: 0,
+    borderRadius: 12,
     overflow: "hidden",
     pointerEvents: "none",
   },
-
-  batteryFill: {
+  slotFill: {
     height: "100%",
-    borderRadius: 10,
     width: "0%",
-    transition: "width 220ms ease, background-color 220ms ease",
+    borderRadius: 12,
+    transition: "width 220ms ease, background-color 220ms ease, opacity 220ms ease",
     willChange: "width",
-    opacity: 0.55,
   },
 
   time: {
@@ -1201,8 +1194,8 @@ const styles: Record<string, React.CSSProperties> = {
   stepper: { marginLeft: "auto", display: "flex", gap: 6, alignItems: "center", position: "relative" },
 
   stepBtnMinus: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
     borderRadius: 10,
     border: "1px solid var(--border)",
     background: "transparent",
@@ -1214,8 +1207,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   stepBtnPlus: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
     borderRadius: 10,
     border: "1px solid var(--border)",
     background: "var(--btn-bg)",
@@ -1226,17 +1219,16 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: "18px",
   },
 
+  // MENU a comparsa
   menuPanel: {
     borderRadius: 12,
-    border: "1px solid var(--border)",
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--panel-bg)",
-    padding: 10,
     overflow: "hidden",
     transition: "max-height 180ms ease, opacity 180ms ease, transform 180ms ease",
     boxShadow: "var(--shadow)",
   },
-
-  menuHint: { fontSize: 12, color: "var(--muted)", fontWeight: 800, marginBottom: 8 },
 
   menuRow: {
     display: "flex",
@@ -1272,8 +1264,6 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     flex: "0 0 auto",
   },
-
-  menuEmpty: { fontSize: 12, color: "var(--muted)", fontWeight: 800, whiteSpace: "nowrap", flex: "0 0 auto" },
 
   popPos: { position: "absolute", top: 46, left: 8, zIndex: 50 },
 
